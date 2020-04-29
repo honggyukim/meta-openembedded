@@ -1,0 +1,108 @@
+From df05830ffbb48b5d087b49dd642b5095667cf7a5 Mon Sep 17 00:00:00 2001
+From: Michael Haener <michael.haener@siemens.com>
+Date: Fri, 24 Apr 2020 11:26:12 +0200
+Subject: [PATCH] feat: add option to build without polkit
+
+---
+ configure.ac           | 14 +++++++++++---
+ src/bridge/Makefile.am |  9 +++++++--
+ src/bridge/bridge.c    |  6 +++++-
+ 3 files changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index dd74987..db6ce42 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -82,7 +82,7 @@ GIO_CFLAGS="$GIO_CFLAGS -DGLIB_VERSION_MAX_ALLOWED=$GLIB_VERSION_DEF"
+ 
+ PKG_CHECK_MODULES(LIBSYSTEMD, [$LIBSYSTEMD_REQUIREMENT])
+ PKG_CHECK_MODULES(JSON_GLIB, [$JSON_GLIB_REQUIREMENT])
+-PKG_CHECK_MODULES(POLKIT, [$POLKIT_REQUIREMENT])
++PKG_CHECK_MODULES(POLKIT, [$POLKIT_REQUIREMENT],enable_polkit="yes",enable_polkit="no")
+ PKG_CHECK_MODULES(GNUTLS, [$GNUTLS_REQUIREMENT])
+ PKG_CHECK_MODULES(KRB5, [$KRB5_REQUIREMENT])
+ 
+@@ -91,8 +91,16 @@ COCKPIT_LIBS="$GIO_LIBS $JSON_GLIB_LIBS $LIBSYSTEMD_LIBS -lutil -lm"
+ AC_SUBST(COCKPIT_CFLAGS)
+ AC_SUBST(COCKPIT_LIBS)
+ 
+-COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS $POLKIT_CFLAGS"
+-COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS $POLKIT_LIBS"
++# bridge with optional polkit
++if test "$enable_polkit" = "yes"; then
++  COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS $POLKIT_CFLAGS"
++  COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS $POLKIT_LIBS"
++  AC_DEFINE_UNQUOTED([WITH_POLKIT], [], [Build with polkit])
++else
++  COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS"
++  COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS"
++fi
++AM_CONDITIONAL(WITH_POLKIT, test "$enable_polkit" = "yes")
+ AC_SUBST(COCKPIT_BRIDGE_CFLAGS)
+ AC_SUBST(COCKPIT_BRIDGE_LIBS)
+ 
+diff --git a/src/bridge/Makefile.am b/src/bridge/Makefile.am
+index dd67770..1bfd24e 100644
+--- a/src/bridge/Makefile.am
++++ b/src/bridge/Makefile.am
+@@ -71,8 +71,6 @@ libcockpit_bridge_a_SOURCES = \
+ 	src/bridge/cockpitpeer.h \
+ 	src/bridge/cockpitpipechannel.c \
+ 	src/bridge/cockpitpipechannel.h \
+-	src/bridge/cockpitpolkitagent.c \
+-	src/bridge/cockpitpolkitagent.h \
+ 	src/bridge/cockpitrouter.c \
+ 	src/bridge/cockpitrouter.h \
+ 	src/bridge/cockpitstream.c \
+@@ -82,6 +80,13 @@ libcockpit_bridge_a_SOURCES = \
+ 	$(libcockpit_bridge_METRICS) \
+ 	$(NULL)
+ 
++if WITH_POLKIT
++libcockpit_bridge_a_SOURCES += \
++	src/bridge/cockpitpolkitagent.c \
++	src/bridge/cockpitpolkitagent.h \
++	$(NULL)
++endif
++
+ libcockpit_bridge_a_CFLAGS = \
+ 	-I$(srcdir)/src/bridge \
+ 	-DG_LOG_DOMAIN=\"cockpit-bridge\" \
+diff --git a/src/bridge/bridge.c b/src/bridge/bridge.c
+index d117106..c030b44 100644
+--- a/src/bridge/bridge.c
++++ b/src/bridge/bridge.c
+@@ -472,7 +472,6 @@ run_bridge (const gchar *interactive,
+   gboolean terminated = FALSE;
+   gboolean interupted = FALSE;
+   gboolean closed = FALSE;
+-  gpointer polkit_agent = NULL;
+   const gchar *directory;
+   struct passwd *pwd;
+   GPid daemon_pid = 0;
+@@ -557,11 +556,14 @@ run_bridge (const gchar *interactive,
+       transport = cockpit_pipe_transport_new_fds ("stdio", 0, outfd);
+     }
+ 
++#ifdef WITH_POLKIT
++  gpointer polkit_agent = NULL;
+   if (uid != 0)
+     {
+       if (!interactive)
+         polkit_agent = cockpit_polkit_agent_register (transport, NULL);
+     }
++#endif
+ 
+   g_resources_register (cockpitassets_get_resource ());
+   cockpit_web_failure_resource = "/org/cockpit-project/Cockpit/fail.html";
+@@ -598,8 +600,10 @@ run_bridge (const gchar *interactive,
+   while (!terminated && !closed && !interupted)
+     g_main_context_iteration (NULL, TRUE);
+ 
++#ifdef WITH_POLKIT
+   if (polkit_agent)
+     cockpit_polkit_agent_unregister (polkit_agent);
++#endif
+ 
+   g_object_unref (router);
+   g_object_unref (transport);
